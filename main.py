@@ -5,28 +5,47 @@ import pandas as pd
 import requests
 import lxml.html
 
-
+# Clemency Sources
 # https://en.wikipedia.org/wiki/List_of_people_pardoned_or_granted_clemency_by_the_president_of_the_United_States
 # https://www.justice.gov/pardon/search-clemency-case-status-since-1989
 # https://www.justice.gov/pardon/clemency-denials
 # https://www.justice.gov/pardon/clemencyrecipients
 
+# Example With Multiple Tables (25 Tables): https://www.justice.gov/pardon/pardons-denied-president-george-w-bush-2001-2009
+# https://pbpython.com/pandas-html-table.html
+from dateutil.parser import ParserError
+from lxml.etree import XMLSyntaxError
+
+root_site: str = "https://www.justice.gov"
+
 
 def retrieve_clemency_denial_urls() -> List[dict]:
-    return clemency_helper("https://www.justice.gov/pardon/clemency-denials",
-                           "/html/body/section[3]/div[2]/div/div/div/article/div[1]/div/div/div/p")
+    denied: List[dict] = clemency_helper(root_site + "/pardon/clemency-denials",
+                                         "/html/body/section[3]/div[2]/div/div/div/article/div[1]/div/div/div/p")
+
+    for page in denied:
+        if page["link"].startswith("/"):
+            page["link"] = root_site + page["link"]
+
+    return denied
 
 
 def retrieve_clemency_recipient_urls() -> List[dict]:
-    return clemency_helper("https://www.justice.gov/pardon/clemencyrecipients",
-                           "/html/body/section[3]/div[2]/div/div/div/div[1]/div/div/div[1]/div/div/div/div/div/div/p")
+    granted: List[dict] = clemency_helper(root_site + "/pardon/clemencyrecipients",
+                                          "/html/body/section[3]/div[2]/div/div/div/div[1]/div/div/div[1]/div/div/div/div/div/div/p")
+
+    for page in granted:
+        if page["link"].startswith("/"):
+            page["link"] = root_site + page["link"]
+
+    return granted
 
 
 def retrieve_archive_clemency_document_url() -> Optional[str]:
-    url: str = "https://www.justice.gov/pardon/search-clemency-case-status-since-1989"
+    doc_url: str = root_site + "/pardon/search-clemency-case-status-since-1989"
     xpath: str = "/html/body/section[3]/div[2]/div/div/div/div[1]/div/div[3]/div[1]/div/div/div/div/div/div/p[2]/a/@href"
 
-    archive_page: requests.Response = requests.get(url=url)
+    archive_page: requests.Response = requests.get(url=doc_url)
     archive_document: lxml.html.HtmlElement = lxml.html.fromstring(archive_page.text)
     document_url: List[lxml.html.HtmlElement] = archive_document.xpath(xpath)
 
@@ -67,16 +86,57 @@ def clemency_helper(clemency_recipients_url: str, xpath: str) -> List[dict]:
     return clemency_recipients_links
 
 
+def add_to_clemency_table(page_url: str, full_table: pd.DataFrame) -> Optional[pd.DataFrame]:
+    try:
+        tables: List[pd.DataFrame] = pd.read_html(io=page_url)
+    except ValueError:
+        print(f"ValueError Trying To Load Table(s) From Page {page_url}")
+
+        exit(1)
+        return None
+    except XMLSyntaxError:
+        print(f"XMLSyntaxError Trying To Load Table(s) From Page {page_url}")
+
+        exit(1)
+        return None
+
+    for table in tables:
+        table.columns = table.iloc[0]
+        table.drop(0, inplace=True)
+
+        fixed_table: pd.DataFrame = pd.Series(table.values.ravel('F')).to_frame("name").dropna()
+
+        try:
+            fixed_table["date"] = pd.to_datetime(table.columns[0])
+        except ParserError as e:
+            print(f"Failed Convert To Date!!! URL: {page_url} - Value: '{table.columns[0]}'")
+            # exit(1)
+            return None
+
+        full_table = pd.concat([full_table, fixed_table], ignore_index=True)
+
+    full_table.sort_values(by=['date', 'name'], inplace=True)
+    full_table.reset_index(inplace=True, drop=True)
+    return full_table
+
+
 # Multiple HTML Tables Per Page
-# retrieve_clemency_recipient_urls()
-# retrieve_clemency_denial_urls()
+# approved_president_urls: List[dict] = retrieve_clemency_recipient_urls()
+denied_president_urls: List[dict] = retrieve_clemency_denial_urls()
 
 # Will Be XLS Document As Of January 2021 - Try pd.read_excel(...)
-# retrieve_archive_clemency_document_url()
+# clemency_url: Optional[str] = retrieve_archive_clemency_document_url()
 
 # TODO: Loop Through All Pages For Tables And Format For Repo, Then Import XLS Document And Do The Same (Unique Values Please)
 # TODO: Note: The HTML Tables Should Be Unique From The Standard DOJ XLS, Mark The Granter/Denier For Each Row
-# Example With Multiple Tables (25 Tables): https://www.justice.gov/pardon/pardons-denied-president-george-w-bush-2001-2009
-# https://pbpython.com/pandas-html-table.html
-tables: List[pd.DataFrame] = pd.read_html(io="https://www.justice.gov/pardon/pardons-denied-president-george-w-bush-2001-2009")
-print(tables)
+
+clemency_table: pd.DataFrame = pd.DataFrame(columns=["date", "name"])
+for url in denied_president_urls:
+    temp_table: Optional[pd.DataFrame] = add_to_clemency_table(page_url=url["link"], full_table=clemency_table)
+
+    if temp_table is not None:
+        temp_table["judge"] = url["link_text"].split("President ")[1]
+        temp_table["status"] = "denied"
+        clemency_table = temp_table
+
+print(clemency_table)
