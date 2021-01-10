@@ -115,8 +115,6 @@ def add_to_clemency_table(page_url: str, full_table: pd.DataFrame) -> Optional[p
 
         full_table = pd.concat([full_table, fixed_table], ignore_index=True)
 
-    full_table.sort_values(by=['date', 'name'], inplace=True)
-    full_table.reset_index(inplace=True, drop=True)
     return full_table
 
 
@@ -138,5 +136,10 @@ for url in denied_president_urls:
         temp_table["judge"] = url["link_text"].split("President ")[1]
         temp_table["status"] = "denied"
         clemency_table = temp_table
+
+# Sort And Cleanup DataFrame
+clemency_table.sort_values(by=['date', 'name'], inplace=True)
+clemency_table.reset_index(inplace=True, drop=True)
+clemency_table.set_index('date', inplace=False).to_csv("test.csv")
 
 print(clemency_table)
